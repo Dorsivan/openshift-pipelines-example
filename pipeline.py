@@ -16,6 +16,17 @@ Then upload the generated YAML to the OpenShift AI dashboard.
 """
 
 from kfp import dsl, compiler
+from kfp import kubernetes
+
+# Kueue scheduling configuration (compile-time values — recompile to change).
+KUEUE_LOCAL_QUEUE = "pipeline-local-queue"
+KUEUE_PRIORITY = "pipeline-default-priority"
+
+
+def apply_kueue_config(task, queue_name=KUEUE_LOCAL_QUEUE, priority_class=KUEUE_PRIORITY):
+    """Configure a pipeline task for Kueue scheduling and preemption."""
+    kubernetes.add_pod_label(task, "kueue.x-k8s.io/queue-name", queue_name)
+    kubernetes.add_pod_label(task, "kueue.x-k8s.io/priority-class", priority_class)
 
 
 @dsl.component(
@@ -224,8 +235,10 @@ def iris_training_pipeline(
         vault_uri=vault_uri,
         vault_token=vault_token,
     )
+    apply_kueue_config(vault_task)
 
     fetch_task = fetch_data_from_uri(data_uri=data_uri)
+    apply_kueue_config(fetch_task)
 
     preprocess_task = preprocess_data(
         raw_data_path=fetch_task.outputs["raw_data_path"],
@@ -233,6 +246,7 @@ def iris_training_pipeline(
         test_size=test_size,
     )
     preprocess_task.after(vault_task)
+    apply_kueue_config(preprocess_task)
 
     train_task = train_model(
         train_features_path=preprocess_task.outputs["train_features_path"],
@@ -240,18 +254,21 @@ def iris_training_pipeline(
         n_estimators=n_estimators,
         max_depth=max_depth,
     )
+    apply_kueue_config(train_task)
 
     eval_task = evaluate_model(
         model_path=train_task.outputs["model_path"],
         test_features_path=preprocess_task.outputs["test_features_path"],
         test_labels_path=preprocess_task.outputs["test_labels_path"],
     )
+    apply_kueue_config(eval_task)
 
     with dsl.If(eval_task.outputs["Output"] >= accuracy_threshold):
-        export_model(
+        export_task = export_model(
             model_path=train_task.outputs["model_path"],
             accuracy=eval_task.outputs["Output"],
         )
+        apply_kueue_config(export_task)
 
 
 if __name__ == "__main__":

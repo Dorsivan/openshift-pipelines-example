@@ -20,6 +20,16 @@ Then upload the generated YAML to the OpenShift AI dashboard.
 from kfp import compiler, dsl
 from kfp import kubernetes
 
+# Kueue scheduling configuration (compile-time values — recompile to change).
+KUEUE_LOCAL_QUEUE = "pipeline-local-queue"
+KUEUE_PRIORITY = "pipeline-default-priority"
+
+
+def apply_kueue_config(task, queue_name=KUEUE_LOCAL_QUEUE, priority_class=KUEUE_PRIORITY):
+    """Configure a pipeline task for Kueue scheduling and preemption."""
+    kubernetes.add_pod_label(task, "kueue.x-k8s.io/queue-name", queue_name)
+    kubernetes.add_pod_label(task, "kueue.x-k8s.io/priority-class", priority_class)
+
 
 # ---------------------------------------------------------------------------
 # Components
@@ -327,6 +337,7 @@ def data_validation_pipeline(
         pvc_name=create_pvc_task.outputs["name"],
         mount_path="/mnt/shared",
     )
+    apply_kueue_config(ingest_task)
 
     # Step 2: Validate data quality (reads from PVC, returns quality_score).
     validate_task = validate_data(data_path=ingest_task.output)
@@ -335,6 +346,7 @@ def data_validation_pipeline(
         pvc_name=create_pvc_task.outputs["name"],
         mount_path="/mnt/shared",
     )
+    apply_kueue_config(validate_task)
 
     # Step 3: Conditional branching based on quality score.
     with dsl.If(validate_task.output >= quality_threshold):
@@ -345,6 +357,7 @@ def data_validation_pipeline(
             pvc_name=create_pvc_task.outputs["name"],
             mount_path="/mnt/shared",
         )
+        apply_kueue_config(transform_task)
 
         report_task = generate_report(row_count=transform_task.output)
         kubernetes.mount_pvc(
@@ -352,6 +365,7 @@ def data_validation_pipeline(
             pvc_name=create_pvc_task.outputs["name"],
             mount_path="/mnt/shared",
         )
+        apply_kueue_config(report_task)
 
     with dsl.Else():
         # --- Bad-data path ---
@@ -361,8 +375,10 @@ def data_validation_pipeline(
             pvc_name=create_pvc_task.outputs["name"],
             mount_path="/mnt/shared",
         )
+        apply_kueue_config(quarantine_task)
 
         alert_task = send_alert(quarantine_path=quarantine_task.output)
+        apply_kueue_config(alert_task)
 
     # Step 4: Clean up the PVC after all branches complete.
     delete_pvc_task = kubernetes.DeletePVC(
