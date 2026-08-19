@@ -122,7 +122,6 @@ Apply the manifests in `kueue/` **once per cluster** (requires cluster-admin):
 oc apply -f kueue/00-resource-flavor.yaml
 oc apply -f kueue/01-workload-priority-classes.yaml
 oc apply -f kueue/02-cluster-queue.yaml
-oc apply -f kueue/04-priority-classes.yaml
 
 # 3. Create the LocalQueue in your pipeline namespace
 #    Edit kueue/03-local-queue.yaml to set the correct namespace first
@@ -136,7 +135,6 @@ oc apply -f kueue/03-local-queue.yaml
 | **WorkloadPriorityClass** | Three Kueue tiers: `pipeline-low-priority` (100), `pipeline-default-priority` (1000), `pipeline-high-priority` (10000) |
 | **ClusterQueue** | Enforces resource quotas (8 CPU / 16 Gi / 2 GPU) with `withinClusterQueue: LowerPriority` preemption |
 | **LocalQueue** | Namespaced queue that feeds into the ClusterQueue |
-| **PriorityClass** | Three Kubernetes scheduler tiers matching the Kueue tiers above |
 
 ### How preemption works
 
