@@ -122,10 +122,14 @@ Apply the manifests in `kueue/` **once per cluster** (requires cluster-admin):
 oc apply -f kueue/00-resource-flavor.yaml
 oc apply -f kueue/01-workload-priority-classes.yaml
 oc apply -f kueue/02-cluster-queue.yaml
+oc apply -f kueue/04-priority-classes.yaml
 
 # 3. Create the LocalQueue in your pipeline namespace
 #    Edit kueue/03-local-queue.yaml to set the correct namespace first
 oc apply -f kueue/03-local-queue.yaml
+
+# 4. Apply the Kyverno policy to inject priorityClassName (requires Kyverno)
+oc apply -f kueue/05-kyverno-priority-class-policy.yaml
 ```
 
 | Resource | Purpose |
@@ -135,8 +139,17 @@ oc apply -f kueue/03-local-queue.yaml
 | **WorkloadPriorityClass** | Three Kueue tiers: `pipeline-low-priority` (100), `pipeline-default-priority` (1000), `pipeline-high-priority` (10000) |
 | **ClusterQueue** | Enforces resource quotas (8 CPU / 16 Gi / 2 GPU) with `withinClusterQueue: LowerPriority` preemption |
 | **LocalQueue** | Namespaced queue that feeds into the ClusterQueue |
+| **PriorityClass** | Three Kubernetes scheduler tiers matching the Kueue tiers above |
+| **Kyverno ClusterPolicy** | Mutates pods to copy the `kueue.x-k8s.io/priority-class` label into `spec.priorityClassName` |
 
 ### How preemption works
+
+Preemption operates at **two layers**:
+
+1. **Kueue admission** — the `kueue.x-k8s.io/priority-class` label references a
+   WorkloadPriorityClass, controlling which workloads Kueue admits or evicts.
+2. **Kubernetes scheduler** — the Kyverno policy copies that same label value into
+   `spec.priorityClassName`, so the scheduler also preempts lower-priority pods.
 
 The ClusterQueue is configured with `withinClusterQueue: LowerPriority`. When all
 quota is consumed and a high-priority workload arrives, Kueue evicts the
