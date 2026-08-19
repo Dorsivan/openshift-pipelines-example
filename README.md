@@ -104,6 +104,92 @@ python pipeline.py
 >   bash -c "pip install -q kfp==2.12.1 && python pipeline.py"
 > ```
 
+## Kueue integration (preemption)
+
+Both pipelines are configured for [Kueue](https://kueue.sigs.k8s.io/) scheduling.
+Kueue manages resource quotas and enables **preemption** — higher-priority pipeline
+runs can evict lower-priority ones when the cluster is at capacity.
+
+### Cluster setup
+
+Apply the manifests in `kueue/` **once per cluster** (requires cluster-admin):
+
+```bash
+# 1. Install Kueue (if not already available via OperatorHub)
+#    See https://kueue.sigs.k8s.io/docs/installation/
+
+# 2. Apply Kueue resources
+oc apply -f kueue/00-resource-flavor.yaml
+oc apply -f kueue/01-workload-priority-classes.yaml
+oc apply -f kueue/02-cluster-queue.yaml
+oc apply -f kueue/04-priority-classes.yaml
+
+# 3. Create the LocalQueue in your pipeline namespace
+#    Edit kueue/03-local-queue.yaml to set the correct namespace first
+oc apply -f kueue/03-local-queue.yaml
+
+# 4. Apply the Kyverno policy to inject priorityClassName (requires Kyverno)
+oc apply -f kueue/05-kyverno-priority-class-policy.yaml
+```
+
+| Resource | Purpose |
+|----------|---------|
+| **ResourceFlavor** (`default-flavor`) | CPU/memory workloads — any node |
+| **ResourceFlavor** (`gpu-flavor`) | GPU workloads — node affinity via `nvidia.com/gpu.present: "true"` |
+| **WorkloadPriorityClass** | Three Kueue tiers: `pipeline-low-priority` (100), `pipeline-default-priority` (1000), `pipeline-high-priority` (10000) |
+| **ClusterQueue** | Enforces resource quotas (8 CPU / 16 Gi / 2 GPU) with `withinClusterQueue: LowerPriority` preemption |
+| **LocalQueue** | Namespaced queue that feeds into the ClusterQueue |
+| **PriorityClass** | Three Kubernetes scheduler tiers matching the Kueue tiers above |
+| **Kyverno ClusterPolicy** | Mutates pods to copy the `kueue.x-k8s.io/priority-class` label into `spec.priorityClassName` |
+
+### How preemption works
+
+Preemption operates at **two layers**:
+
+1. **Kueue admission** — the `kueue.x-k8s.io/priority-class` label references a
+   WorkloadPriorityClass, controlling which workloads Kueue admits or evicts.
+2. **Kubernetes scheduler** — the Kyverno policy copies that same label value into
+   `spec.priorityClassName`, so the scheduler also preempts lower-priority pods.
+
+The ClusterQueue is configured with `withinClusterQueue: LowerPriority`. When all
+quota is consumed and a high-priority workload arrives, Kueue evicts the
+lowest-priority running workloads to make room.
+
+To run a pipeline at a different priority, change the `KUEUE_PRIORITY` constant
+at the top of the pipeline file and recompile:
+
+```python
+KUEUE_PRIORITY = "pipeline-high-priority"  # or "pipeline-low-priority"
+```
+
+### Enabling pod integration
+
+Kueue must be configured to manage plain pods (KFP tasks run as individual pods).
+If you installed Kueue via the operator, ensure the pod integration framework is
+enabled in the Kueue configuration:
+
+```yaml
+integrations:
+  frameworks:
+    - "pod"
+  podOptions:
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: [kube-system, kueue-system]
+```
+
+### Pipeline-side changes
+
+Each pipeline task is labelled with two Kueue labels via `kubernetes.add_pod_label()`:
+
+- `kueue.x-k8s.io/queue-name` — assigns the task to a LocalQueue
+- `kueue.x-k8s.io/priority-class` — references a WorkloadPriorityClass for preemption ordering
+
+These are **compile-time** values (baked into the YAML). To change them, edit the
+constants at the top of the pipeline `.py` file and recompile.
+
 ## Base images
 
 All pipeline steps use `registry.redhat.io/ubi9/python-311:latest` (Red Hat
