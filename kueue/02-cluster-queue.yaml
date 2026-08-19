@@ -8,7 +8,7 @@ spec:
     reclaimWithinCohort: Any
   namespaceSelector: {}
   resourceGroups:
-    - coveredResources: ["cpu", "memory", "nvidia.com/gpu"]
+    - coveredResources: ["cpu", "memory"]
       flavors:
         - name: default-flavor
           resources:
@@ -16,5 +16,9 @@ spec:
               nominalQuota: 8
             - name: "memory"
               nominalQuota: "16Gi"
+    - coveredResources: ["nvidia.com/gpu"]
+      flavors:
+        - name: gpu-flavor
+          resources:
             - name: "nvidia.com/gpu"
               nominalQuota: 2
